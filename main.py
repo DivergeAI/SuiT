@@ -8,6 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import json
 import random
+import torch.multiprocessing as mp
 
 from pathlib import Path
 
@@ -502,6 +503,29 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == '__main__':
+    # Set the multiprocessing start method to 'spawn' (if available and not already set).
+    # This is crucial for CUDA compatibility when using multiprocessing, especially
+    # with DataLoader workers that might initialize CUDA resources (e.g., when
+    # a model or tensors are moved to GPU within the dataset's __getitem__).
+    # 'fork' (the default on Linux) can lead to "Cannot re-initialize CUDA in
+    # forked subprocess" errors.
+    if hasattr(mp, 'set_start_method'):
+        try:
+            current_method = mp.get_start_method(allow_none=True)
+            if current_method != 'spawn':
+                mp.set_start_method('spawn', force=True)
+                print("Multiprocessing start method successfully set to 'spawn'.")
+            else:
+                print("Multiprocessing start method already 'spawn'. No change needed.")
+        except RuntimeError as e:
+            print(f"Could not set multiprocessing start method to 'spawn': {e}")
+            print("This might be an issue if CUDA is used in DataLoader workers "
+                  "or if the context has already been set by another part of the program.")
+        except Exception as e: # Catch any other unexpected errors
+            print(f"An unexpected error occurred while setting multiprocessing start method: {e}")
+    else:
+        print("torch.multiprocessing.set_start_method is not available in this PyTorch version.")
+
     parser = argparse.ArgumentParser('DeiT training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
     if args.output_dir:
