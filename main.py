@@ -29,7 +29,13 @@ import utils
 from torch.utils.tensorboard import SummaryWriter
 
 
-def get_args_parser():
+def get_args_parser() -> argparse.ArgumentParser:
+    """
+    Parses command-line arguments for the training and evaluation script.
+
+    Returns:
+        argparse.ArgumentParser: The argument parser with all defined arguments.
+    """
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
     parser.add_argument('--batch-size', default=64, type=int)
     parser.add_argument('--epochs', default=300, type=int)
@@ -188,11 +194,36 @@ def get_args_parser():
     parser.add_argument('--pe-injection', default='concat', choices=['concat', 'sum'], type=str, help="position encoding method")
     parser.set_defaults(use_proj=True)
 
+    # Adaptive Superpixel Arguments
+    parser.add_argument('--adaptive-superpixels', action='store_true', default=False,
+                        help='Enable adaptive superpixel parameter prediction (K and m)')
+    parser.add_argument('--k-min', type=int, default=100, help='Min K for adaptive superpixels')
+    parser.add_argument('--k-max', type=int, default=300, help='Max K for adaptive superpixels')
+    parser.add_argument('--m-min', type=float, default=1.0, help='Min m for adaptive superpixels') # SLIC m can be float
+    parser.add_argument('--m-max', type=float, default=20.0, help='Max m for adaptive superpixels')
+
+    # Hierarchical Superpixel Arguments
+    parser.add_argument('--hierarchical-superpixels', action='store_true', default=False,
+                        help='Enable hierarchical superpixel generation')
+    parser.add_argument('--hierarchical-ks', type=int, nargs='+', default=[64, 128, 256],
+                        help='List of K values for hierarchical superpixels (e.g., 64 128 256)')
+
     parser.add_argument('--trial_name', type=str, required=True)
     return parser
 
 
-def main(args):
+def main(args: argparse.Namespace):
+    """
+    Main function for training and evaluation.
+
+    Initializes distributed mode, sets seeds, builds datasets and dataloaders,
+    creates the model, optimizer, scheduler, and criterion.
+    Handles checkpoint resumption, evaluation, and the main training loop.
+    Logs results to TensorBoard and a log file.
+
+    Args:
+        args (argparse.Namespace): Parsed command-line arguments.
+    """
     utils.init_distributed_mode(args)
     logger = SummaryWriter(log_dir=f'./logs/{args.trial_name}')
     print(args)
@@ -261,16 +292,26 @@ def main(args):
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
 
     print(f"Creating model: {args.model}")
+    
+    model_kwargs = {}
+    if args.model.startswith('suit'): # Only for SuiT models
+        if args.hierarchical_superpixels:
+            model_kwargs['hierarchical_superpixels'] = True
+            model_kwargs['num_scales'] = len(args.hierarchical_ks)
+        # The suit.py model registration functions (e.g. suit_tiny_224) now accept
+        # hierarchical_superpixels and num_scales and other **kwargs.
+        # They will pass these along to the SuperpixelVisionTransformer constructor.
+
     model = create_model(
         args.model,
-        pretrained=False,
+        pretrained=False, # Or args.pretrained if you add a pretrained CLI arg for timm models
         num_classes=args.nb_classes,
         drop_rate=args.drop,
         drop_path_rate=args.drop_path,
-        drop_block_rate=None,
-        img_size=args.input_size
+        # drop_block_rate=None, # VisionTransformer doesn't use this; it's for other model types
+        img_size=args.input_size, 
+        **model_kwargs      # Pass the SUIT specific args
     )
-
                     
     if args.finetune:
         if args.finetune.startswith('https'):
